@@ -1,0 +1,81 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <error.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <bpf/libbpf.h>
+#include "hello.skel.h"
+#define DEBUGFS "/sys/kernel/debug/tracing/"
+
+/* logging function used for debugging */
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
+{
+#ifdef DEBUGBPF
+    return vfprintf(stderr, format, args);
+#else
+    return 0;
+#endif
+}
+
+/* read trace logs from debug fs */
+void read_trace_pipe(void)
+{
+    int trace_fd;
+
+    trace_fd = open(DEBUGFS "trace_pipe", O_RDONLY, 0);
+    if (trace_fd < 0)
+        return;
+
+    while (1) {
+        static char buf[4096];
+        ssize_t sz;
+
+        sz = read(trace_fd, buf, sizeof(buf) - 1);
+        if (sz> 0) {
+            buf[sz] = 0;
+            puts(buf);
+        }
+    }
+}
+
+int main(int argc, char **argv)
+{
+    struct hello_bpf *skel;
+    int err;
+
+    /* Set up libbpf errors and debug info callback */
+    libbpf_set_print(libbpf_print_fn);
+
+    /* Bump RLIMIT_MEMLOCK to allow BPF sub-system to do anything */
+    //bump_memlock_rlimit();
+
+    /* Open BPF application */
+    skel = hello_bpf__open();
+    if (!skel) {
+        fprintf(stderr, "Failed to open BPF skeleton\n");
+        return 1;
+    }
+
+    /* Load & verify BPF programs */
+    err = hello_bpf__load(skel);
+    if (err) {
+        fprintf(stderr, "Failed to load and verify BPF skeleton\n");
+        goto cleanup;
+    }
+
+    /* Attach tracepoint handler */
+    err = hello_bpf__attach(skel);
+    if (err) {
+        fprintf(stderr, "Failed to attach BPF skeleton\n");
+        goto cleanup;
+    }
+
+    printf("Hello BPF started, hit Ctrl+C to stop!\n");
+
+    read_trace_pipe();
+
+cleanup:
+    hello_bpf__destroy(skel);
+    return -err;
+}
