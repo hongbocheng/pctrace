@@ -47,11 +47,11 @@ int BPF_KPROBE(do_sys_open, int dfd, char *filename)
     return 0;
 }
 
-SEC("kprobe/vfs_open")
-int BPF_KPROBE(vfs_open, struct path *path, struct file *file)
+SEC("kretprobe/vfs_open")
+int kretprobe__vfs_open(struct pt_regs *ctx)
 {
-    //struct file *file = (struct file *)PT_REGS_PARM2(ctx);
-    __u64 ino = BPF_CORE_READ(file,f_inode,i_ino);
+    struct file *file = (struct file *)PT_REGS_PARM1(ctx);
+    __u64 ino = file->f_inode->i_ino;
     bpf_printk("vfs inode number: %llu\n",ino);
 /*
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
