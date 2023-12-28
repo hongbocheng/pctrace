@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <bpf/libbpf.h>
 #include "hello.skel.h"
+#include <sys/resource.h>
 #define DEBUGFS "/sys/kernel/debug/tracing/"
 
 /* logging function used for debugging */
@@ -39,6 +40,19 @@ void read_trace_pipe(void)
     }
 }
 
+static void bump_memlock_rlimit(void)
+{
+ struct rlimit rlim_new = {
+  .rlim_cur  = RLIM_INFINITY,
+  .rlim_max  = RLIM_INFINITY,
+ };
+
+ if (setrlimit(RLIMIT_MEMLOCK, &rlim_new)) {
+  fprintf(stderr, "Failed to increase RLIMIT_MEMLOCK limit!\n");
+  exit(1);
+ }
+}
+
 int main(int argc, char **argv)
 {
     struct hello_bpf *skel;
@@ -48,7 +62,7 @@ int main(int argc, char **argv)
     libbpf_set_print(libbpf_print_fn);
 
     /* Bump RLIMIT_MEMLOCK to allow BPF sub-system to do anything */
-    //bump_memlock_rlimit();
+   bump_memlock_rlimit();
 
     /* Open BPF application */
     skel = hello_bpf__open();
