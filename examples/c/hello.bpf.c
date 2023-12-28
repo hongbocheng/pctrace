@@ -27,7 +27,7 @@ struct {
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, MAX_ENTRIES);
-	__type(key, __u64);
+	__type(key, __u32);
 	__type(value, struct data_t);
 } openfiles SEC(".maps");
 
@@ -35,10 +35,11 @@ SEC("kprobe/do_sys_open")
 int kprobe__do_sys_open(struct pt_regs *ctx)
 {
     struct data_t data = {};
-    u32 pid = bpf_get_current_pid_tgid();
+
+    __u32 pid = bpf_get_current_pid_tgid() >> 32;
 
     data.pid = pid;
-    bpf_probe_read(&data.filename, sizeof(data.filename), (void*)PT_REGS_PARM1(ctx));
+    bpf_probe_read(&data.filename, sizeof(data.filename), (void*)PT_REGS_PARM2(ctx));
 
     bpf_map_update_elem(&tmp, &pid, &data, BPF_ANY);
 
@@ -48,10 +49,10 @@ int kprobe__do_sys_open(struct pt_regs *ctx)
 SEC("kprobe/vfs_open")
 int kprobe__vfs_open(struct pt_regs *ctx)
 {
-    struct file *file = (struct file *)PT_REGS_PARM1(ctx);
+    struct file *file = (struct file *)PT_REGS_PARM2(ctx);
     struct inode *inode = file->f_inode;
 
-    u32 pid = bpf_get_current_pid_tgid();
+    __u32 pid = bpf_get_current_pid_tgid() >> 32;
     struct data_t *data = bpf_map_lookup_elem(&tmp,&pid);
 
     if (!data) {
@@ -68,7 +69,7 @@ int kprobe__vfs_open(struct pt_regs *ctx)
 SEC("kretprobe/do_sys_open")
 int kretprobe__do_sys_open(struct pt_regs *ctx)
 {
-    u32 pid = bpf_get_current_pid_tgid();
+    __u32 pid = bpf_get_current_pid_tgid() >> 32;
 
     bpf_map_delete_elem(&tmp,&pid);
     return 0;
