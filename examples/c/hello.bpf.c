@@ -31,8 +31,8 @@ struct {
 	__type(value, struct data_t);
 } openfiles SEC(".maps");
 
-SEC("kprobe/do_sys_open")
-int BPF_KPROBE(do_sys_open, int dfd, char *filename)
+SEC("fentry/do_sys_openat2")
+int BPF_PROG(do_sys_openat2, int dfd, char *filename)
 {
     struct data_t data = {};
 
@@ -42,29 +42,34 @@ int BPF_KPROBE(do_sys_open, int dfd, char *filename)
     //char *fname = filename
     bpf_probe_read(&data.filename, sizeof(data.filename), (void*) filename);
 
+    bpf_printk("pid: %lu, file: %s\n",data.pid,data.filename);
+
     bpf_map_update_elem(&tmp, &pid, &data, BPF_ANY);
 
     return 0;
 }
 
-SEC("kretprobe/vfs_open")
-int kretprobe__vfs_open(struct pt_regs *ctx)
+SEC("fentry/vfs_open")
+int BPF_PROG(vfs_open, struct path *path, struct file *file)
 {
-    struct file *file = (struct file *)PT_REGS_PARM1(ctx);
-    __u64 ino = file->f_inode->i_ino;
-    bpf_printk("vfs inode number: %llu\n",ino);
-/*
+//__u32 ino = file->f_inode->i_ino;
+
+//if (!path || !path->dentry)
+//	return 0;
+
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
     struct data_t *data = bpf_map_lookup_elem(&tmp,&pid);
 
     if (!data) {
+//	    bpf_printk("vfs_open not found existing data struct!\n");
         return 0; // missed entry
     }
-
-    data->inode = inode->i_ino; // get the inode number
-    //openfiles.update(&data->inode, data);
-    bpf_map_update_elem(&openfiles, &pid, &data, BPF_ANY);
-*/
+    data->inode = path->dentry->d_inode->i_ino; // set the inode number in data struct
+    bpf_map_update_elem(&openfiles, &pid, data, BPF_ANY);
+    struct data_t *test_data = bpf_map_lookup_elem(&openfiles,&pid);
+    if (test_data) {
+    bpf_printk("vfs_---ino is: %llu, PID is: %lu, filename: %s\n",test_data->inode,test_data->pid,test_data->filename);
+    } 
     return 0;
 }
 
@@ -79,7 +84,7 @@ int BPF_KRETPROBE(do_sys_open_ret, int ret)
 }
 */
 
-/* trace page cache addition */
+/* trace page cache addition 
 SEC("kprobe/add_to_page_cache_lru")
 //int trace_page_cache_lru_addition(struct pt_regs *ctx) {
 int BPF_KPROBE(add_to_page_cache_lru,struct page *page, struct address_space *mapping) { //,pgoff_t offset, gfp_t gfp_mask) {
@@ -92,4 +97,5 @@ int BPF_KPROBE(add_to_page_cache_lru,struct page *page, struct address_space *ma
 
 	return 0;
 }
+*/
 char _license[] SEC("license") = "GPL";
