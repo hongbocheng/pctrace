@@ -3,7 +3,7 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 #define pgoff_t unsigned long
-#define MAX_ENTRIES	8192
+#define MAX_ENTRIES	81920
 //typedef unsigned int __bitwise gfp_t;
 
 struct data_t {
@@ -32,14 +32,15 @@ struct {
 } openfiles SEC(".maps");
 
 SEC("kprobe/do_sys_open")
-int kprobe__do_sys_open(struct pt_regs *ctx)
+int BPF_KPROBE(do_sys_open, int dfd, char *filename)
 {
     struct data_t data = {};
 
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
 
     data.pid = pid;
-    bpf_probe_read(&data.filename, sizeof(data.filename), (void*)PT_REGS_PARM2(ctx));
+    //char *fname = filename
+    bpf_probe_read(&data.filename, sizeof(data.filename), (void*) filename);
 
     bpf_map_update_elem(&tmp, &pid, &data, BPF_ANY);
 
@@ -47,11 +48,12 @@ int kprobe__do_sys_open(struct pt_regs *ctx)
 }
 
 SEC("kprobe/vfs_open")
-int kprobe__vfs_open(struct pt_regs *ctx)
+int BPF_KPROBE(vfs_open, struct path *path, struct file *file)
 {
-    struct file *file = (struct file *)PT_REGS_PARM2(ctx);
-    struct inode *inode = file->f_inode;
-
+    //struct file *file = (struct file *)PT_REGS_PARM2(ctx);
+    __u64 ino = BPF_CORE_READ(file,f_inode,i_ino);
+    bpf_printk("vfs inode number: %llu\n",ino);
+/*
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
     struct data_t *data = bpf_map_lookup_elem(&tmp,&pid);
 
@@ -62,19 +64,20 @@ int kprobe__vfs_open(struct pt_regs *ctx)
     data->inode = inode->i_ino; // get the inode number
     //openfiles.update(&data->inode, data);
     bpf_map_update_elem(&openfiles, &pid, &data, BPF_ANY);
-
+*/
     return 0;
 }
 
+/*
 SEC("kretprobe/do_sys_open")
-int kretprobe__do_sys_open(struct pt_regs *ctx)
+int BPF_KRETPROBE(do_sys_open_ret, int ret)
 {
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
 
     bpf_map_delete_elem(&tmp,&pid);
     return 0;
 }
-
+*/
 
 /* trace page cache addition */
 SEC("kprobe/add_to_page_cache_lru")
