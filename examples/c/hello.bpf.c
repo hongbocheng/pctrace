@@ -6,45 +6,66 @@
 #define MAX_ENTRIES	81920
 //typedef unsigned int __bitwise gfp_t;
 
-struct data_t {
-    __u32 pid;
-    __u64 inode;
+struct vfsfiles {
     char filename[256];
+    char vfsfilename[128];
+};
+
+struct openat_key {
+	pid_t pid;
+	pid_t tid;
+};
+
+struct openat_files {
+	char fname[256];
 };
 
 /*
 BPF_HASH(tmp, u32, struct data_t);
 BPF_HASH(openfiles, u64, struct data_t);
 */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MAX_ENTRIES);
+	__type(key, struct openat_key);
+	__type(value, struct openat_files);
+} openatinfo SEC(".maps");
 
+/*
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, MAX_ENTRIES);
 	__type(key, __u32);
 	__type(value, struct data_t);
 } tmp SEC(".maps");
-
+*/
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, MAX_ENTRIES);
-	__type(key, __u32);
-	__type(value, struct data_t);
-} openfiles SEC(".maps");
+	__type(key, u64);
+	__type(value, struct vfsfiles);
+} vfsopenfiles SEC(".maps");
 
 SEC("fentry/do_sys_openat2")
 int BPF_PROG(do_sys_openat2, int dfd, char *filename)
 {
-    struct data_t data = {};
+    struct openat_files openfile = {};
+    struct openat_key key = {};
+        pid_t pid,tid;
+	u64 id;
+	id = bpf_get_current_pid_tgid();
+	pid = id >> 32;
+	tid = (u32)id;
 
-    __u32 pid = bpf_get_current_pid_tgid() >> 32;
-
-    data.pid = pid;
+    key.pid = pid;
+    key.tid = tid;
     //char *fname = filename
-    bpf_probe_read(&data.filename, sizeof(data.filename), (void*) filename);
+    bpf_probe_read(&openfile.fname, sizeof(openfile.fname), (void*) filename);
 
-    bpf_printk("pid: %lu, file: %s\n",data.pid,data.filename);
+    bpf_printk("id: %llu, pid: %lu, tid: %lu, file: %s\n",id,key.pid,key.tid,openfile.fname);
 
-    bpf_map_update_elem(&tmp, &pid, &data, BPF_ANY);
+
+    bpf_map_update_elem(&openatinfo, &key, &openfile, BPF_ANY);
 
     return 0;
 }
@@ -57,19 +78,30 @@ int BPF_PROG(vfs_open, struct path *path, struct file *file)
 //if (!path || !path->dentry)
 //	return 0;
 
-    __u32 pid = bpf_get_current_pid_tgid() >> 32;
-    struct data_t *data = bpf_map_lookup_elem(&tmp,&pid);
+        pid_t pid,tid;
+	u64 id;
+	id = bpf_get_current_pid_tgid();
+	pid = id >> 32;
+	tid = (u32)id;
+	struct openat_key key = {};
+	key.pid = pid;
+	key.tid = tid;
+	struct openat_files *openat_fname = bpf_map_lookup_elem(&openatinfo,&key);
 
-    if (!data) {
-//	    bpf_printk("vfs_open not found existing data struct!\n");
+    if (!openat_fname) {
+    bpf_printk("vfs_open not found existing openat_files record!\n");
         return 0; // missed entry
     }
-    data->inode = path->dentry->d_inode->i_ino; // set the inode number in data struct
-    bpf_map_update_elem(&openfiles, &pid, data, BPF_ANY);
-    struct data_t *test_data = bpf_map_lookup_elem(&openfiles,&pid);
-    if (test_data) {
-    bpf_printk("vfs_---ino is: %llu, PID is: %lu, filename: %s\n",test_data->inode,test_data->pid,test_data->filename);
-    } 
+    u64 inode_id = path->dentry->d_inode->i_ino; // set the inode number in data struct
+    struct vfsfiles vfsfile = {};
+    bpf_probe_read(vfsfile.vfsfilename, sizeof(vfsfile.vfsfilename),  (struct path *)path->dentry->d_name.name);
+    bpf_probe_read(vfsfile.filename,sizeof(vfsfile.filename),(struct vfsfiles *)openat_fname->fname);
+    /*
+    */
+    //vfsfile.vfsfilename = path->dentry->d_name.name;
+    //bpf_printk("file name from vfs_open: %s, inode id: %llu openat filename: %s\n",path->dentry->d_name.name,inode_id,openat_fname->fname); 
+    bpf_printk("file name from vfs_open: %s, inode id: %llu openat filename: %s\n",vfsfile.vfsfilename,inode_id,vfsfile.filename); 
+    bpf_map_update_elem(&vfsopenfiles, &inode_id, &vfsfile , BPF_ANY);
     return 0;
 }
 
@@ -85,11 +117,22 @@ int BPF_KRETPROBE(do_sys_open_ret, int ret)
 */
 
 /* trace page cache addition 
-SEC("kprobe/add_to_page_cache_lru")
+*/
+SEC("fentry/add_to_page_cache_lru")
 //int trace_page_cache_lru_addition(struct pt_regs *ctx) {
-int BPF_KPROBE(add_to_page_cache_lru,struct page *page, struct address_space *mapping) { //,pgoff_t offset, gfp_t gfp_mask) {
+int BPF_PROG(add_to_page_cache_lru,struct page *page, struct address_space *mapping) { //,pgoff_t offset, gfp_t gfp_mask) {
         u64 inumber = BPF_CORE_READ(mapping,host,i_ino);
-	bpf_printk("inode number: %llu\n",inumber);
+        pid_t pid,tid;
+	u64 id;
+	id = bpf_get_current_pid_tgid();
+	pid = id >> 32;
+	tid = (u32)id;
+    struct vfsfiles *pcdata = bpf_map_lookup_elem(&vfsopenfiles,&inumber);
+    if (pcdata) {
+	bpf_printk("inode number from page cache ---: %llu, pc_pid: %lu, vfs_file: %s, filename: %s\n",inumber,pid,pcdata->vfsfilename,pcdata->filename);
+    } else {
+	    bpf_printk("inode number---: %llu\n",inumber);
+    }
 	//struct task_struct *task;
 	//task = (struct task_struct *)bpf_get_current_task();
 //bpf_get_current_comm(&comm,sizeof(comm));
@@ -97,5 +140,4 @@ int BPF_KPROBE(add_to_page_cache_lru,struct page *page, struct address_space *ma
 
 	return 0;
 }
-*/
 char _license[] SEC("license") = "GPL";
